@@ -77,7 +77,6 @@ def list_books(
     if sort is None:
         query = query.order_by(Book.id.asc())
     else:
-        # ``sort`` is title/-title/price/-price; ties always break by id ascending.
         column = Book.price_cents if sort.lstrip("-") == "price" else Book.title
         ordering = column.desc() if sort.startswith("-") else column.asc()
         query = query.order_by(ordering, Book.id.asc())
