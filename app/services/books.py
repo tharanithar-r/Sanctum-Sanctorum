@@ -2,7 +2,7 @@
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Book
@@ -72,8 +72,9 @@ def list_books(
     if max_price is not None:
         query = query.where(Book.price_cents <= max_price)
 
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+
     # TODO: apply ``sort``
     books = db.scalars(query.order_by(Book.id.asc()).limit(limit).offset(offset)).all()
-    total = len(books)
 
     return BookPage(items=books, total=total, limit=limit, offset=offset)
