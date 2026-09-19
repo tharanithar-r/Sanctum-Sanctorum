@@ -74,7 +74,14 @@ def list_books(
 
     total = db.scalar(select(func.count()).select_from(query.subquery()))
 
-    # TODO: apply ``sort``
-    books = db.scalars(query.order_by(Book.id.asc()).limit(limit).offset(offset)).all()
+    if sort is None:
+        query = query.order_by(Book.id.asc())
+    else:
+        # ``sort`` is title/-title/price/-price; ties always break by id ascending.
+        column = Book.price_cents if sort.lstrip("-") == "price" else Book.title
+        ordering = column.desc() if sort.startswith("-") else column.asc()
+        query = query.order_by(ordering, Book.id.asc())
+
+    books = db.scalars(query.limit(limit).offset(offset)).all()
 
     return BookPage(items=books, total=total, limit=limit, offset=offset)
