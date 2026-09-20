@@ -21,12 +21,15 @@ MemberName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=
 NonNegativeInt = Annotated[int, Field(ge=0)]
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# [0-9] rather than \d or str.isdigit(): both of those accept non-ASCII digits
+# (Arabic-Indic, fullwidth), which int() then converts, letting a look-alike ISBN through.
+ISBN_PATTERN = re.compile(r"[0-9]{13}")
 
 
 def normalize_isbn13(raw: str) -> str:
     """Strip hyphens/spaces and verify the ISBN-13 checksum. Raises ValueError if invalid."""
     isbn = raw.replace("-", "").replace(" ", "")
-    if len(isbn) != 13 or not isbn.isdigit():
+    if not ISBN_PATTERN.fullmatch(isbn):
         raise ValueError("isbn must contain exactly 13 digits")
     total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(isbn))
     if (total % 10) != 0:
