@@ -1,112 +1,77 @@
 # NOTES.md
 
-**Live app: https://sanctum-sanctorum-7csw.onrender.com**
+**Live app:** https://sanctum-sanctorum-7csw.onrender.com
 
-Sign in with member id **1** (Wong Li, supreme tier). There's no password, the UI just takes an id.
-The other seeded members are 2 Christine Palmer (master), 3 Jonathan Pangborn (adept) and 4 Sara Lin
-(apprentice).
+The app is deployed on Render's free tier, so it goes to sleep after 15 minutes without traffic. Because of that, the **first load can take around a minute** while the service and database wake up. The header badge retries for a few seconds before showing "API unreachable", so a red status after that means the API is actually unavailable.
 
-Two things that look like faults but aren't. The app runs on Render's free tier, which sleeps after
-15 minutes with no traffic, so **the first load takes about a minute** while the service wakes and
-the database resumes. The header badge retries for a few seconds before declaring the API down, so a
-red "API unreachable" now means it really is down. And the data lives in a hosted Postgres database
-rather than inside the container, so whatever you click through survives restarts and redeploys.
+The data is stored in hosted Postgres rather than inside the container, so it persists across restarts and redeploys.
+
+No authentication is required. The starter UI is designed around entering a member ID directly.
 
 ## What's done
 
-Everything in `app/`, with all **219 tests passing** and none skipped.
+Everything in `app/` is implemented, with **219 tests passing and none skipped**.
 
-- **Books**: ISBN-13 checksum, duplicate detection, the full listing endpoint (title and author
-  search, restricted and price filters, sorting with id tie-breaks, pagination), and
-  `PATCH /books/{id}`.
-- **Members**: email normalisation and uniqueness, stats, and a paginated `GET /members`.
-- **Orders**: tier and bulk pricing, stock reservation, pay and cancel.
-- **Loans**: the model was three columns short so I added them, then the borrowing rules, returns
-  and late fees.
-- **Reports**: top books by copies sold over paid orders.
-- **Row locks** so two concurrent orders can't oversell the last copy.
+* **Books:** ISBN-13 validation, duplicate detection, listing/search/filter/sort/pagination, and `PATCH /books/{id}`.
+* **Members:** email normalization and uniqueness, member stats, and paginated listing.
+* **Orders:** tier and bulk pricing, stock reservation, payment, and cancellation.
+* **Loans:** borrowing rules, returns, and late fees. The model was also missing three required columns, which I added.
+* **Reports:** top books by copies sold from paid orders.
+* **Concurrency:** row locking to prevent two concurrent orders from overselling the last copy.
 
 ## What I skipped, and what I'd do with more time
+All required items are covered, along with the three optional extras.
 
-Nothing from the required list, and all three optional extras are in. I didn't add authentication,
-but that isn't a skip: the starter kit's UI is built around typing a member id, so adding auth
-would have broken the frontend.
+I did not add authentication because the starter UI is explicitly built around entering a member ID. Adding authentication would have changed that flow without being required by the assignment.
 
 With more time, roughly in the order I'd do them:
 
-1. **Close the duplicate-check race.** `create_book` and `create_member` both check-then-insert, so
-   two concurrent requests with the same ISBN or email can both pass the check and the unique index
-   then raises `IntegrityError`, surfacing as a 500 instead of a 409. Catching `IntegrityError` and
-   re-raising 409 is the fix, and that's what I'd ship under real traffic.
-2. **Add migrations.** `create_all` on startup is fine for a fresh database and needs Alembic the
-   moment the schema has to change in place. Adding the missing `Loan` columns already means
-   deleting a local `sanctum.db` (`make reset-db`) rather than migrating it.
-3. **Move engine creation out of import time.** `app/db.py` builds its engine when the module is
-   imported, so importing it requires the driver for whatever URL is configured. Set
-   `SANCTUM_DATABASE_URL` without the `postgres` group installed and even the test suite fails on a
-   missing module. It never bites in practice, but it's a sharp edge.
+1. **Handle duplicate creation races.**
+   `create_book` and `create_member` currently use a check-then-insert flow. Concurrent requests can both pass the check and then hit the database unique constraint, resulting in an `IntegrityError` instead of a clean `409`. I'd catch and translate that error.
+
+2. **Add database migrations.**
+   `create_all` is fine for the assignment and a fresh database, but schema changes in a real application should go through Alembic migrations. The missing `Loan` columns are a good example of why this matters.
+
+3. **Move database engine creation out of import time.**
+   `app/db.py` currently creates the engine during import. It works in the deployed setup, but making initialization more explicit would avoid unnecessary coupling between imports and the configured database driver.
 
 ## Decisions and trade-offs
 
-**Services own the rules, routers stay thin.** `create_order` and `create_loan` both need the
-restricted-books rule, so they call `members.ensure_can_access_restricted` rather than re-implementing
-it. One home for that rule means orders and loans can't drift on what "master or above" means.
+**Services own business rules.**
+The routers stay thin, while rules such as restricted-book access live in the service layer. For example, both orders and loans use the same member access check instead of implementing the rule separately.
 
-**Validation is split across two layers, deliberately.** The spec orders `POST /orders` checks so the
-422s come before the 404s. Those 422s live in the Pydantic schema, so FastAPI rejects a bad body
-before the handler runs and the ordering is free rather than hand-coded. The 404/403/409 checks stay
-in the service. Worth knowing if that endpoint is ever refactored: the ordering is partly enforced by
-the request lifecycle, not by the service.
+**Validation happens at two levels.**
+Pydantic handles request validation, while business checks such as `404`, `403`, and `409` remain in the service layer. This also preserves the required validation order for `POST /orders`.
 
-**A failed order can't half-reserve stock.** Every stock check finishes before any `book.stock -=`
-runs, with a single `db.commit()` at the end, so a failure leaves nothing half-changed. Same shape in
-`create_loan`. That's structural, not a matter of getting the line order right.
+**Stock changes happen inside one transaction.**
+All stock checks complete before the stock is modified, with the transaction committed only after the operation succeeds. This prevents a failed order or loan from leaving partially updated state.
 
-**The Postgres driver is an opt-in dependency group.** `ASSIGNMENT.md` forbids new dependencies and
-`INSTRUCTIONS.md` requires a hosted database, so the default install stays exactly as specified and
-only the deployment opts in with `uv sync --group postgres --no-dev`.
+**Render + Neon instead of keeping SQLite in production.**
+The assignment requires a hosted database for deployment, so I kept SQLite as the default for local tests and used Neon Postgres for the deployed application.
 
-**No keep-alive ping.** Keeping Render awake would also keep Neon's compute running. At 0.25 CU,
-720 hours is about 180 CU-hours against a 100/month allowance, which would suspend the database
-mid-month. The ~1 minute cold start is the cheaper trade.
+I intentionally did not add a keep-alive mechanism. The cold start is inconvenient, but keeping the service and database running continuously would use significantly more of the available free-tier resources.
 
 ## Bugs I found and fixed
 
-- `tier_at_least` used `>` where it needed `>=`, so a `master` failed the `master` minimum and
-  masters were locked out of restricted books in both orders and loans. Its own docstring said "at
-  or above", so it contradicted itself.
-- `cancel_order`'s docstring promised to restore reserved stock, but the body only flipped the
-  status. Stock was never coming back.
-- `normalize_isbn13` used `str.isdigit()`, which is true for non-ASCII digits like Arabic-Indic `٧`
-  or fullwidth `７`. Python's `int()` converts those happily, so a look-alike ISBN passed validation
-  and was stored as its own "unique" value, visually identical to a real one. It's matched with
-  `[0-9]{13}` now, which is ASCII-only.
+* `tier_at_least` used `>` instead of `>=`, meaning a `master` member could not satisfy a `master` minimum.
+* `cancel_order` changed the order status but did not restore the reserved stock, despite its docstring saying it would.
+* `normalize_isbn13` used `str.isdigit()`, which accepts non-ASCII digits. Python's `int()` also accepts many of them, allowing visually similar ISBN values to pass validation. I changed the validation to explicitly accept ASCII digits and added edge-case tests.
 
-## Spec points I'd flag
+## Spec points I flagged
 
-**Mixed-case title ordering is explicitly unspecified**, and the spec says so. SQLite sorts
-uppercase first, Postgres generally doesn't. I left it alone rather than forcing a collation, since
-both are accepted.
+**Mixed-case title ordering is unspecified.**
+SQLite and Postgres can order mixed-case strings differently. Since the spec explicitly leaves this unspecified, I did not introduce custom collation behavior.
 
-**`POST /orders` reserves stock immediately and `pay` doesn't touch it.** Cancelling is the only
-thing that returns stock, and cancelling requires `pending`, so a paid order can't be undone through
-the API at all. I assume that's intentional, though I'd want to confirm it.
+**Order cancellation and payment behavior.**
+Stock is reserved when an order is created and returned only when a pending order is cancelled. A paid order cannot currently be cancelled through the API. I treated this as the intended behavior, but it is something I'd clarify with the author of the spec.
 
-**One tension in the brief.** The extras invite "tests for any edge case you think is missing" while
-the ground rules say not to modify anything in `tests/`. I read that as add new files and leave the
-existing ones alone, so the extra coverage went into a new `tests/test_edge_cases.py` and the
-original suite is untouched.
+**Extra test coverage.**
+The instructions ask for additional edge-case tests while also saying not to modify the existing tests. I interpreted that as leaving the provided tests untouched and adding new coverage in `tests/test_edge_cases.py`.
 
 ## AI usage
 
-I built the project as the primary developer, using Claude through Reasonix as an engineering assistant. I drove the architecture and implementation, ran the verification, and handled the Neon and Render setup myself. I mainly used the agent to check library documentation, understand unfamiliar SQLAlchemy 2.0 patterns, and help debug test cases. I also validated its suggestions rather than blindly accepting them. For example, testing ISBN validation with non-ASCII numerals uncovered a real edge case that I fixed and covered with dedicated tests.
+I built the project as the primary developer, using Deepseek through the Reasonix coding agent as an engineering assistant. I made the implementation decisions, reviewed the diffs, ran the verification, and handled the Neon and Render setup myself.
 
-**Where it was wrong.** I asked early whether the ISBN validation had holes and got a plausible
-answer: `isdigit()` accepts non-ASCII digits, so `int()` would fail on those and the request would
-come back as a 422 rather than something cleaner. That last part was wrong. When I actually ran the
-function against Arabic-Indic and fullwidth numerals, most of them didn't fail at all, because
-`int()` converts them without complaint. A look-alike ISBN passed validation and went into the
-database as its own "unique" value. Reading the code and running the code gave two different
-answers and I'd only been given the first, which is what turned into `tests/test_edge_cases.py`. It
-had a related habit of writing defensive code for cases that can't occur, such as an `or 0` after a
-`SELECT count(*)` that always returns one row.
+I mainly used the agent to check library documentation, understand unfamiliar SQLAlchemy 2.0 patterns, and help with repetitive implementation and test debugging. I treated its output as something to verify rather than something to blindly accept.
+
+One useful example was ISBN validation. The agent initially suggested that `isdigit()` followed by `int()` would reject non-ASCII digits. I tested that assumption with Arabic-Indic and fullwidth numerals and found that Python accepts many of them. That exposed a real validation gap where a visually different ISBN could be stored as a separate value. I fixed the validation and added regression tests.
