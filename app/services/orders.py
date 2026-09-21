@@ -5,8 +5,9 @@ from typing import Dict
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import Book, Member, MemberTier, Order, OrderItem, OrderStatus
+from app.models import Member, MemberTier, Order, OrderItem, OrderStatus
 from app.schemas import OrderCreate
+from app.services import books as book_service
 from app.services import members
 
 # Percentage discount granted by each membership tier.
@@ -42,12 +43,11 @@ def create_order(db: Session, data: OrderCreate, now: datetime) -> Order:
     """
     member = members.get_member(db, data.member_id)
 
+    # Lock in a stable order: two multi-book orders could otherwise deadlock by
+    # each holding one row the other needs.
     books = {}
-    for item in data.items:
-        book = db.get(Book, item.book_id)
-        if book is None:
-            raise HTTPException(status_code=404, detail="Book not found")
-        books[item.book_id] = book
+    for book_id in sorted({item.book_id for item in data.items}):
+        books[book_id] = book_service.get_book(db, book_id, for_update=True)
 
     if any(book.restricted for book in books.values()):
         members.ensure_can_access_restricted(member)

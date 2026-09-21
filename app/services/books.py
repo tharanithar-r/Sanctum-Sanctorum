@@ -25,9 +25,16 @@ def create_book(db: Session, data: BookCreate) -> Book:
     return book
 
 
-def get_book(db: Session, book_id: int) -> Book:
-    """Return a book by id, or raise 404."""
-    book = db.get(Book, book_id)
+def get_book(db: Session, book_id: int, for_update: bool = False) -> Book:
+    """Return a book by id, or raise 404.
+
+    ``for_update`` takes a row lock that is held until the transaction commits, so
+    concurrent stock changes serialise instead of both reading the same value.
+    """
+    query = select(Book).where(Book.id == book_id)
+    if for_update:
+        query = query.with_for_update()
+    book = db.scalar(query)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     return book

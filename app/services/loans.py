@@ -67,7 +67,7 @@ def create_loan(db: Session, data: LoanCreate, now: datetime) -> LoanOut:
     late_fee_cents 0, and stock is decremented by one.
     """
     member = members.get_member(db, data.member_id)
-    book = book_service.get_book(db, data.book_id)
+    book = book_service.get_book(db, data.book_id, for_update=True)
 
     if book.restricted:
         members.ensure_can_access_restricted(member)
