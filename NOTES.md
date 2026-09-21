@@ -2,10 +2,15 @@
 
 **Live app: https://sanctum-sanctorum-7csw.onrender.com**
 
+Sign in with member id **1** (Wong Li, supreme tier). There's no password, the UI just takes an id.
+The other seeded members are 2 Christine Palmer (master), 3 Jonathan Pangborn (adept) and 4 Sara Lin
+(apprentice).
+
 Two things that look like faults but aren't. The app runs on Render's free tier, which sleeps after
 15 minutes with no traffic, so **the first load takes about a minute** while the service wakes and
-the database resumes. And the data lives in a hosted Postgres database rather than inside the
-container, so whatever you click through survives restarts and redeploys.
+the database resumes. The header badge retries for a few seconds before declaring the API down, so a
+red "API unreachable" now means it really is down. And the data lives in a hosted Postgres database
+rather than inside the container, so whatever you click through survives restarts and redeploys.
 
 ## What's done
 

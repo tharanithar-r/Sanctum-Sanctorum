@@ -101,6 +101,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .api-status .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b93a7; }
 .api-status[data-state="ok"] .dot { background: #4cc38a; }
 .api-status[data-state="down"] .dot { background: #f0776c; }
+.api-status[data-state="waking"] .dot { background: #e0b341; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 8px;

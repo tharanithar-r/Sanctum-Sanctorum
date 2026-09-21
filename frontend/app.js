@@ -399,18 +399,46 @@ function renderHeader() {
   $('#cart-count').setAttribute('aria-label', pluralize(count, 'item'));
 }
 
+/* The free tier sleeps after 15 minutes idle, and the first /health call can fail outright while
+   the service wakes. Two quick retries cover that transient case without making the visitor wait. */
+const HEALTH_RETRY_DELAYS_MS = [2000, 5000];
+const WAKE_UP_STATUSES = [502, 503, 504];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function checkHealth() {
   const el = $('#api-status');
-  try {
-    const data = await api('/health', { toast: false });
-    const ok = data?.status === 'ok';
-    el.dataset.state = ok ? 'ok' : 'down';
-    $('.label', el).textContent = ok ? 'API online' : 'API degraded';
-  } catch (err) {
-    el.dataset.state = 'down';
-    $('.label', el).textContent = err.status === 0 ? 'API unreachable' : `API error (${err.status})`;
-    if (err.status === 0) notifyApiError(err, 'Health check');
+  const label = $('.label', el);
+  const looksLikeWakeUp = (status) => status === 0 || WAKE_UP_STATUSES.includes(status);
+
+  for (let attempt = 0; attempt <= HEALTH_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      el.dataset.state = 'waking';
+      label.textContent = 'Waking the API up…';
+      await sleep(HEALTH_RETRY_DELAYS_MS[attempt - 1]);
+    }
+    try {
+      const data = await api('/health', { toast: false });
+      const ok = data?.status === 'ok';
+      el.dataset.state = ok ? 'ok' : 'down';
+      label.textContent = ok ? 'API online' : 'API degraded';
+      return;
+    } catch (err) {
+      // A real answer from the API means it is up, so only connection and gateway failures
+      // are worth retrying. Those are exactly what a cold start looks like from a browser.
+      if (!looksLikeWakeUp(err.status)) {
+        el.dataset.state = 'down';
+        label.textContent = `API error (${err.status})`;
+        return;
+      }
+    }
   }
+
+  el.dataset.state = 'down';
+  label.textContent = 'API unreachable';
+  notifyApiError(
+    new ApiError(0, 'Could not reach the server after several attempts. Check that the API is running.'),
+    'Health check',
+  );
 }
 
 /* =========================================================================
